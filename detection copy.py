@@ -4,6 +4,22 @@ import math
 import controller
 import time  # For delay control
 from cvfpscalc import CvFpsCalc
+from collections import deque
+
+class InputSmoother:
+    def __init__(self, window_size=10):
+        self.window_size = window_size
+        self.inputs = deque(maxlen=window_size)
+
+    def add_input(self, value):
+        self.inputs.append(value)
+        return self.get_smoothed_value()
+
+    def get_smoothed_value(self):
+        if not self.inputs:
+            return 0
+        return sum(self.inputs) / len(self.inputs)
+    
 
 # Utility functions
 def calculate_distance(point1, point2):
@@ -38,6 +54,9 @@ servo_angles = {
     SERVO_VERTICAL_3: 0,
 }
 
+
+
+
 # Gradual Calibration to 90° at Startup
 calibration_speed = 1
 while any(angle != 90 for angle in servo_angles.values()):
@@ -52,8 +71,10 @@ while any(angle != 90 for angle in servo_angles.values()):
     time.sleep(0.02)
 
 # Sensitivity controls
-sensitivity = 180
+sensitivity = 90
 cvFpsCalc = CvFpsCalc(buffer_len=20)
+firstJointSmoother = InputSmoother()
+secondJointSmoother = InputSmoother()
 
 while True:
     fps = cvFpsCalc.get()
@@ -81,10 +102,10 @@ while True:
             vertical_offset = (hand_y - FRAME_CENTER_Y) / sensitivity
 
             servo_angles[SERVO_LATERAL] -= lateral_offset
-            servo_angles[SERVO_VERTICAL_1] -= vertical_offset
-            servo_angles[SERVO_VERTICAL_2] += vertical_offset
-            servo_angles[SERVO_VERTICAL_3] -= vertical_offset
-
+            # servo_angles[SERVO_VERTICAL_1] -= vertical_offset
+            # servo_angles[SERVO_VERTICAL_2] += vertical_offset
+            # servo_angles[SERVO_VERTICAL_3] -= vertical_offset
+            
             # Code 2's tracking logic (Claw control)
             thumb_tip = lmList[4]
             middle_finger_tip = lmList[12]
@@ -93,15 +114,20 @@ while True:
             center_Hand = lmList[9]
             center_HandYAxis = center_Hand[2]
 
-            center_HandMap = round(map_value(center_HandYAxis, 450, 50, 0, 100))
+            center_HandMap = round(map_value(center_HandYAxis, 450, 50, 0, 80))
             print(center_HandYAxis)
-            cv2.putText(image, f"Y Axis: {center_HandMap}", (10, 150), cv2.FONT_HERSHEY_COMPLEX, 1, (255, 200, 200), 2, cv2.LINE_AA)
-            controller.set_servo_angle(SERVO_VERTICAL_1, center_HandMap)
+            smoothed_distance2 = secondJointSmoother.add_input(center_HandMap)
+            cv2.putText(image, f"Y Axis: {smoothed_distance2}", (10, 150), cv2.FONT_HERSHEY_COMPLEX, 1, (255, 200, 200), 2, cv2.LINE_AA)
+            controller.set_servo_angle(SERVO_VERTICAL_2, smoothed_distance2)
+            controller.set_servo_angle(SERVO_VERTICAL_1, 70)
+
+
             
             reference_distance = calculate_distance((wrist[1], wrist[2]), (index_mcp[1], index_mcp[2]))
-            distanceMapped = round(map_value(reference_distance, 150, 100, 90, 180), 2)
-            controller.set_servo_angle(SERVO_VERTICAL_2, distanceMapped)
-            cv2.putText(image, f"Distance: {distanceMapped}", (10, 120), cv2.FONT_HERSHEY_COMPLEX, 1, (255, 200, 200), 2, cv2.LINE_AA)
+            distanceMapped = round(map_value(reference_distance, 100, 50, 90, 180), 2)
+            smoothed_distance = firstJointSmoother.add_input(distanceMapped)
+            controller.set_servo_angle(SERVO_VERTICAL_3, smoothed_distance)
+            cv2.putText(image, f"Distance: {smoothed_distance}", (10, 120), cv2.FONT_HERSHEY_COMPLEX, 1, (255, 200, 200), 2, cv2.LINE_AA)
 
 
 
@@ -115,12 +141,13 @@ while True:
             cv2.line(image, (thumb_tip[1], thumb_tip[2]), (middle_finger_tip[1], middle_finger_tip[2]), (0, 255, 0), 2)
             cv2.line(image, (wrist[1], wrist[2]), (index_mcp[1], index_mcp[2]), (0, 255, 0), 2)
             cv2.putText(image, f"Angle: {mapped_distance}", (10, 60), cv2.FONT_HERSHEY_COMPLEX, 1, (100, 255, 100), 2, cv2.LINE_AA)
+
             controller.set_servo_angle(SERVO_CLAW, mapped_distance)
 
     # Clamp angles between 0 and 180
-    # for servo in servo_angles:
-    #     servo_angles[servo] = max(0, min(180, servo_angles[servo]))
-    #     controller.set_servo_angle(servo, servo_angles[servo])
+    for servo in servo_angles:
+        servo_angles[servo] = max(0, min(180, servo_angles[servo]))
+        controller.set_servo_angle(SERVO_LATERAL, servo_angles[SERVO_LATERAL])
 
     # Display debug info
     cv2.putText(image, f"Lateral: {servo_angles[SERVO_LATERAL]:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
